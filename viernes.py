@@ -44,7 +44,7 @@ def inicializar_cliente():
 
 
 def configurar_autenticacion():
-    hash_password = "$2b$12$ywh.WUiQv3oev.XO4FhPZOzRblhUhs5x2aJe0YcZlehhZb0/O3eqK"
+    hash_password = "$2b$12$T1dDgjVeVidEcQMLUo8FnuAUlyWITzlJcUoMDOBigksdhuxeo.4BG"
     config = {
         'credentials': {
             'usernames': {
