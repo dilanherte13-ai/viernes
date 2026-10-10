@@ -17,7 +17,10 @@ MODELO_CHAT = "openai/gpt-oss-120b"
 MODELO_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
 MODELO_AUDIO = "whisper-large-v3-turbo"
 ARCHIVO_BD = "viernes_memoria_v2.db"
-USUARIO = "jefe"
+USUARIOS = {
+    "jefe": "Viernes2026",
+    "Yerley": "clave123",
+}
 CONTRASENA = "Viernes2026"
 MAX_TURNOS = 10
 
