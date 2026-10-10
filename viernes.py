@@ -1,351 +1,258 @@
 """
-Viernes - Asistente personal en la nube (Versión Definitiva)
-------------------------------------------------------------
-Incluye: micrófono (Groq Whisper), voz (navegador), memoria persistente,
-visión, búsqueda en internet, matemáticas paso a paso y login.
+Viernes - Asistente personal en la nube (Versión Final Definitiva)
 """
 import os
-import re
 import sqlite3
 import datetime
 import base64
 import streamlit as st
 import streamlit.components.v1 as components
-import streamlit_authenticator as stauth
 from groq import Groq
 from duckduckgo_search import DDGS
 
 st.set_page_config(page_title="Viernes", page_icon="🛰️", layout="centered")
 
+# ===== CONFIGURACIÓN =====
 MODELO_CHAT = "llama-3.3-70b-versatile"
 MODELO_VISION = "llama-3.2-11b-vision-preview"
 MODELO_AUDIO = "whisper-large-v3-turbo"
 ARCHIVO_BD = "viernes_memoria.db"
-MAX_TURNOS_MEMORIA = 10
+USUARIO = "jefe"
+CONTRASENA = "Viernes2026"
+MAX_TURNOS = 10
 
 PERSONALIDAD = (
     "Eres Viernes (F.R.I.D.A.Y.), la IA personal del usuario, sucesora de J.A.R.V.I.S. "
     "Hablas en español neutro, con tono sereno, cercano y un humor seco ocasional. "
     "Tratas al usuario de 'jefe'. Eres directa, eficiente y cálida. "
-    "Cuando resuelvas problemas matemáticos, SIEMPRE muestra el paso a paso, "
-    "explicando cada operación con claridad y terminando con el resultado final. "
+    "Cuando resuelvas problemas matemáticos, SIEMPRE muestra el paso a paso. "
     "Si no sabes algo, lo dices con honestidad. No inventas datos."
 )
 
-
+# ===== CLIENTE GROQ =====
 @st.cache_resource
-def inicializar_cliente():
+def get_groq():
+    return Groq(api_key=st.secrets["GROQ_API_KEY"])
+
+# ===== BASE DE DATOS =====
+def init_db():
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        cur = c.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS historial (id INTEGER PRIMARY KEY AUTOINCREMENT, rol TEXT, contenido TEXT, fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        cur.execute("CREATE TABLE IF NOT EXISTS recuerdos (id INTEGER PRIMARY KEY AUTOINCREMENT, dato TEXT UNIQUE, fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        c.commit()
+
+def guardar_msg(rol, contenido):
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        c.execute("INSERT INTO historial (rol, contenido) VALUES (?, ?)", (rol, contenido))
+        c.commit()
+
+def get_historial(limite=20):
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        cur = c.execute("SELECT rol, contenido FROM historial ORDER BY id DESC LIMIT ?", (limite,))
+        return [{"role": r, "content": t} for r, t in reversed(cur.fetchall())]
+
+def guardar_recuerdo(dato):
     try:
-        groq_key = st.secrets["GROQ_API_KEY"]
-    except (KeyError, FileNotFoundError):
-        st.error("Falta la clave GROQ_API_KEY en los Secrets de Streamlit.")
-        st.stop()
-    return Groq(api_key=groq_key)
-
-
-def configurar_autenticacion():
-    hash_password = "$2b$12$T1dDgjVeVidEcQMLUo8FnuAUlyWITzlJcUoMDOBigksdhuxeo.4BG"
-    config = {
-        'credentials': {
-            'usernames': {
-                'jefe': {
-                    'name': 'Jefe',
-                    'password': hash_password,
-                    'email': 'jefe@viernes.com'
-                }
-            }
-        },
-        'cookie': {
-            'expiry_days': 30,
-            'key': 'viernes_cookie_clave_secreta',
-            'name': 'viernes_cookie'
-        }
-    }
-    return stauth.Authenticate(
-        config['credentials'],
-        config['cookie']['name'],
-        config['cookie']['key'],
-        config['cookie']['expiry_days']
-    )
-
-
-def inicializar_db():
-    with sqlite3.connect(ARCHIVO_BD) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS historial ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "usuario TEXT NOT NULL, rol TEXT NOT NULL, "
-            "contenido TEXT NOT NULL, "
-            "fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
-        )
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS recuerdos ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-            "usuario TEXT NOT NULL, dato TEXT NOT NULL UNIQUE, "
-            "fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
-        )
-        conn.commit()
-
-
-def guardar_mensaje(usuario, rol, contenido):
-    with sqlite3.connect(ARCHIVO_BD) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO historial (usuario, rol, contenido) VALUES (?, ?, ?)",
-            (usuario, rol, contenido)
-        )
-        conn.commit()
-
-
-def obtener_historial(usuario, limite=20):
-    with sqlite3.connect(ARCHIVO_BD) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT rol, contenido FROM historial WHERE usuario = ? "
-            "ORDER BY id DESC LIMIT ?",
-            (usuario, limite)
-        )
-        filas = cursor.fetchall()
-        return [{"role": rol, "content": contenido} for rol, contenido in reversed(filas)]
-
-
-def guardar_recuerdo(usuario, dato):
-    try:
-        with sqlite3.connect(ARCHIVO_BD) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO recuerdos (usuario, dato) VALUES (?, ?)",
-                (usuario, dato)
-            )
-            conn.commit()
+        with sqlite3.connect(ARCHIVO_BD) as c:
+            c.execute("INSERT INTO recuerdos (dato) VALUES (?)", (dato,))
+            c.commit()
         return True
     except sqlite3.IntegrityError:
         return False
 
+def get_recuerdos():
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        return [r[0] for r in c.execute("SELECT dato FROM recuerdos").fetchall()]
 
-def obtener_recuerdos(usuario):
-    with sqlite3.connect(ARCHIVO_BD) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT dato FROM recuerdos WHERE usuario = ?", (usuario,))
-        return [fila[0] for fila in cursor.fetchall()]
+# ===== VOZ (navegador, gratis) =====
+def hablar(texto):
+    texto = texto.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${").replace("\n", " ")[:600]
+    components.html(f"""
+    <script>
+    try {{
+        speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(`{texto}`);
+        u.lang = 'es-ES'; u.rate = 1.0; u.pitch = 0.9;
+        const v = speechSynthesis.getVoices().find(x => x.lang.startsWith('es'));
+        if (v) u.voice = v;
+        speechSynthesis.speak(u);
+    }} catch(e) {{}}
+    </script>
+    """, height=0)
 
-
-def hablar_navegador(texto):
-    texto = texto.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
-    texto = texto.replace("\n", " ")[:600]
-    components.html(
-        """
-        <script>
-        try {
-            window.speechSynthesis.cancel();
-            const u = new SpeechSynthesisUtterance(`%s`);
-            u.lang = 'es-ES';
-            u.rate = 1.0;
-            u.pitch = 0.9;
-            const voces = speechSynthesis.getVoices();
-            const esVoz = voces.find(v => v.lang.startsWith('es'));
-            if (esVoz) u.voice = esVoz;
-            speechSynthesis.speak(u);
-        } catch(e) {}
-        </script>
-        """ % texto,
-        height=0,
-    )
-
-
-def transcribir_audio(audio_bytes, groq_client):
+# ===== MICRÓFONO (Groq Whisper, gratis) =====
+def transcribir(audio_bytes, groq_client):
     try:
-        transcripcion = groq_client.audio.transcriptions.create(
+        t = groq_client.audio.transcriptions.create(
             file=("audio.wav", audio_bytes),
             model=MODELO_AUDIO,
             language="es"
         )
-        return transcripcion.text.strip()
+        return t.text.strip()
     except Exception as e:
         return f"[Error de audio: {e}]"
 
-
-def buscar_en_internet(consulta):
+# ===== BÚSQUEDA Y VISIÓN =====
+def buscar_internet(consulta):
     try:
-        with DDGS() as ddgs:
-            resultados = [r for r in ddgs.text(consulta, max_results=3)]
-        if not resultados:
-            return "No encontré información sobre eso en internet."
-        contexto = "\n".join([f"- {r['title']}: {r['body']}" for r in resultados])
-        return f"Esto es lo que encontré en internet:\n{contexto}"
+        with DDGS() as d:
+            res = [r for r in d.text(consulta, max_results=3)]
+        if not res:
+            return "No encontré información sobre eso."
+        return "Encontré esto:\n" + "\n".join([f"- {r['title']}: {r['body']}" for r in res])
     except Exception as e:
-        return f"Error al buscar en internet: {e}"
+        return f"Error: {e}"
 
-
-def analizar_imagen(imagen_bytes, prompt, groq_client):
+def analizar_imagen(img_bytes, prompt, groq_client):
     try:
-        base64_image = base64.b64encode(imagen_bytes).decode('utf-8')
-        respuesta = groq_client.chat.completions.create(
+        b64 = base64.b64encode(img_bytes).decode('utf-8')
+        r = groq_client.chat.completions.create(
             model=MODELO_VISION,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:image/jpeg;base64,{base64_image}"
-                    }}
-                ]
-            }],
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+            ]}],
             max_tokens=500
         )
-        return respuesta.choices[0].message.content
+        return r.choices[0].message.content
     except Exception as e:
-        return f"Error al analizar la imagen: {e}"
+        return f"Error al ver la imagen: {e}"
 
+# ===== RESPUESTA =====
+def responder(prompt, groq_client, img_bytes=None):
+    p = prompt.lower().strip()
 
-def generar_respuesta(usuario, prompt_texto, groq_client, imagen_bytes=None):
-    prompt_lower = prompt_texto.lower().strip()
+    if p.startswith("recuerda que "):
+        dato = prompt[12:].strip()
+        return f"Anotado, jefe: «{dato}»" if guardar_recuerdo(dato) else "Ya lo tenía anotado, jefe."
 
-    if prompt_lower.startswith("recuerda que "):
-        dato = prompt_texto[12:].strip()
-        if guardar_recuerdo(usuario, dato):
-            return f"Entendido, jefe. Lo recordaré: «{dato}»"
-        return "Ya tenía eso anotado, jefe."
+    if img_bytes:
+        return analizar_imagen(img_bytes, prompt, groq_client)
 
-    if imagen_bytes:
-        return analizar_imagen(imagen_bytes, prompt_texto, groq_client)
+    if p.startswith("busca ") or "en internet" in p:
+        q = prompt.replace("busca", "", 1).replace("en internet", "").strip()
+        return buscar_internet(q)
 
-    if prompt_lower.startswith("busca ") or "en internet" in prompt_lower:
-        consulta = prompt_texto.replace("busca", "", 1).replace("en internet", "").strip()
-        return buscar_en_internet(consulta)
-
-    recuerdos = obtener_recuerdos(usuario)
-    historial = obtener_historial(usuario, MAX_TURNOS_MEMORIA)
-
+    recuerdos = get_recuerdos()
+    historial = get_historial(MAX_TURNOS)
     mensajes = [{"role": "system", "content": PERSONALIDAD}]
     if recuerdos:
-        contexto_recuerdos = (
-            "Recuerdos importantes sobre el jefe:\n"
-            + "\n".join([f"- {r}" for r in recuerdos])
-        )
-        mensajes.append({"role": "system", "content": contexto_recuerdos})
+        mensajes.append({"role": "system", "content": "Recuerdos del jefe:\n" + "\n".join(f"- {r}" for r in recuerdos)})
     mensajes.extend(historial)
-    mensajes.append({"role": "user", "content": prompt_texto})
+    mensajes.append({"role": "user", "content": prompt})
 
     try:
         stream = groq_client.chat.completions.create(
-            model=MODELO_CHAT,
-            messages=mensajes,
-            stream=True,
-            temperature=0.5,
-            max_tokens=1500,
+            model=MODELO_CHAT, messages=mensajes, stream=True, temperature=0.5, max_tokens=1500
         )
-        respuesta_completa = ""
+        completo = ""
         for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                respuesta_completa += delta
-                yield delta
-        guardar_mensaje(usuario, "assistant", respuesta_completa)
+            d = chunk.choices[0].delta.content
+            if d:
+                completo += d
+                yield d
+        guardar_msg("assistant", completo)
     except Exception as e:
-        yield f"Lo siento, jefe, tuve un problema: {e}"
+        yield f"Problema, jefe: {e}"
 
-
-def procesar_prompt(usuario, prompt_texto, groq_client, imagen_bytes, voz_activada):
-    with st.chat_message("user", avatar="🧑"):
-        if prompt_texto:
-            st.markdown(prompt_texto)
-        if imagen_bytes:
-            st.image(imagen_bytes, caption="Imagen enviada", width=300)
-
-    guardar_mensaje(usuario, "user", prompt_texto or "[Imagen enviada]")
-
-    with st.chat_message("assistant", avatar="🛰️"):
-        caja_respuesta = st.empty()
-        respuesta_completa = ""
-        for trozo in generar_respuesta(usuario, prompt_texto, groq_client, imagen_bytes):
-            respuesta_completa += trozo
-            caja_respuesta.markdown(respuesta_completa + "▌")
-        caja_respuesta.markdown(respuesta_completa)
-
-    if voz_activada and respuesta_completa:
-        hablar_navegador(respuesta_completa)
-
-
+# ===== INTERFAZ =====
 def main():
-    inicializar_db()
-    groq_client = inicializar_cliente()
-    authenticator = configurar_autenticacion()
+    init_db()
+    groq_client = get_groq()
 
-    authenticator.login(location='main')
-    name = st.session_state.get("name")
-    authentication_status = st.session_state.get("authentication_status")
-    username = st.session_state.get("username")
+    # --- LOGIN SIMPLE ---
+    if "logueado" not in st.session_state:
+        st.session_state.logueado = False
 
-    if authentication_status is False:
-        st.error('Usuario o contraseña incorrectos')
+    if not st.session_state.logueado:
+        st.title("🛰️ Viernes")
+        st.caption("Acceso restringido")
+        u = st.text_input("Usuario")
+        p = st.text_input("Contraseña", type="password")
+        if st.button("Entrar"):
+            if u == USUARIO and p == CONTRASENA:
+                st.session_state.logueado = True
+                st.rerun()
+            else:
+                st.error("Usuario o contraseña incorrectos")
         st.stop()
-    elif authentication_status is None:
-        st.warning('Por favor, introduce tu usuario y contraseña')
-        st.stop()
 
-    st.sidebar.success(f"Bienvenido, {name}")
-    authenticator.logout('Cerrar sesión', 'sidebar')
+    # --- APP (ya logueado) ---
+    st.sidebar.success("Bienvenido, jefe")
+    if st.sidebar.button("Cerrar sesión"):
+        st.session_state.logueado = False
+        st.rerun()
 
-    st.sidebar.markdown("---")
-    voz_activada = st.sidebar.toggle("🔊 Responder en voz alta", value=False)
+    voz_on = st.sidebar.toggle("🔊 Responder en voz alta", value=False)
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🧠 Recuerdos")
-    recuerdos = obtener_recuerdos(username)
-    if recuerdos:
-        for r in recuerdos:
+    recs = get_recuerdos()
+    if recs:
+        for r in recs:
             st.sidebar.caption(f"- {r}")
-        if st.sidebar.button("Borrar todos los recuerdos"):
-            with sqlite3.connect(ARCHIVO_BD) as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM recuerdos WHERE usuario = ?", (username,))
-                conn.commit()
+        if st.sidebar.button("Borrar recuerdos"):
+            with sqlite3.connect(ARCHIVO_BD) as c:
+                c.execute("DELETE FROM recuerdos")
+                c.commit()
             st.rerun()
     else:
-        st.sidebar.caption("Aún no recuerdo nada. Escríbeme «recuerda que...»")
+        st.sidebar.caption("Nada aún. Dile: «recuerda que...»")
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📸 Analizar imagen")
-    archivo_imagen = st.sidebar.file_uploader(
-        "Sube una foto para que Viernes la vea",
-        type=["jpg", "jpeg", "png"]
-    )
-    imagen_bytes = None
-    if archivo_imagen is not None:
-        imagen_bytes = archivo_imagen.getvalue()
-        st.sidebar.image(archivo_imagen, caption="Imagen cargada", use_container_width=True)
+    st.sidebar.subheader("📸 Imagen")
+    img_file = st.sidebar.file_uploader("Sube una foto", type=["jpg", "jpeg", "png"])
+    img_bytes = img_file.getvalue() if img_file else None
+    if img_file:
+        st.sidebar.image(img_file, use_container_width=True)
 
     st.title("🛰️ Viernes")
-    st.caption("Tu asistente personal en la nube · disponible desde cualquier dispositivo")
+    st.caption("Tu asistente personal · disponible 24/7")
 
-    for mensaje in obtener_historial(username, 50):
-        avatar = "🧑" if mensaje["role"] == "user" else "🛰️"
-        with st.chat_message(mensaje["role"], avatar=avatar):
-            st.markdown(mensaje["content"])
+    for m in get_historial(50):
+        av = "🧑" if m["role"] == "user" else "🛰️"
+        with st.chat_message(m["role"], avatar=av):
+            st.markdown(m["content"])
 
-    with st.expander("🎤 Hablar con Viernes (toca aquí para grabar)"):
-        audio_grabado = st.audio_input("Graba tu mensaje", key="audio_input_viernes")
-        if audio_grabado is not None:
-            if st.button("📤 Enviar audio a Viernes", key="enviar_audio"):
-                with st.spinner("Transcribiendo tu voz..."):
-                    texto_transcrito = transcribir_audio(audio_grabado.getvalue(), groq_client)
-                if texto_transcrito and not texto_transcrito.startswith("[Error"):
-                    st.success(f"Escuché: «{texto_transcrito}»")
-                    procesar_prompt(username, texto_transcrito, groq_client, None, voz_activada)
-                    st.rerun()
-                else:
-                    st.error(texto_transcrito)
+    # --- MICRÓFONO ---
+    with st.expander("🎤 Hablar con Viernes (toca para grabar)"):
+        audio = st.audio_input("Graba tu mensaje")
+        if audio is not None and st.button("📤 Enviar audio"):
+            with st.spinner("Escuchando..."):
+                texto = transcribir(audio.getvalue(), groq_client)
+            if texto and not texto.startswith("[Error"):
+                st.success(f"Dijiste: «{texto}»")
+                st.session_state["prompt_pendiente"] = texto
+                st.rerun()
+            else:
+                st.error(texto)
 
-    prompt_texto = st.chat_input("Escríbele a Viernes...")
+    prompt = st.chat_input("Escríbele a Viernes...")
 
-    if imagen_bytes and not prompt_texto:
-        prompt_texto = "Describe lo que ves en esta imagen."
+    # Procesar audio pendiente
+    if "prompt_pendiente" in st.session_state:
+        prompt = st.session_state.pop("prompt_pendiente")
 
-    if prompt_texto:
-        procesar_prompt(username, prompt_texto, groq_client, imagen_bytes, voz_activada)
+    if img_bytes and not prompt:
+        prompt = "Describe lo que ves en esta imagen."
 
+    if prompt:
+        with st.chat_message("user", avatar="🧑"):
+            st.markdown(prompt)
+            if img_bytes:
+                st.image(img_bytes, width=300)
+        guardar_msg("user", prompt)
+
+        with st.chat_message("assistant", avatar="🛰️"):
+            caja = st.empty()
+            resp = ""
+            for t in responder(prompt, groq_client, img_bytes):
+                resp += t
+                caja.markdown(resp + "▌")
+            caja.markdown(resp)
+        if voz_on and resp:
+            hablar(resp)
 
 if __name__ == "__main__":
     main()
