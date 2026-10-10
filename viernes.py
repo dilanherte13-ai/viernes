@@ -245,9 +245,11 @@ def main():
     inicializar_db()
     groq_client = inicializar_cliente()
     authenticator = configurar_autenticacion()
+authenticator.login(location='main')
+name = st.session_state.get("name")
+authentication_status = st.session_state.get("authentication_status")
+username = st.session_state.get("username")
 
-    name, authentication_status, username = authenticator.login(location='main')
-    
     if authentication_status is False:
         st.error('Usuario o contraseña incorrectos')
         st.stop()
