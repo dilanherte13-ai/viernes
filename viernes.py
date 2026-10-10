@@ -21,7 +21,7 @@ USUARIOS = {
     "jefe": "Viernes2026",
     "Yerley": "clave123",
 }
-CONTRASENA = "Viernes2026"
+CONTRASENA = "Viernes2026" "clave123"
 MAX_TURNOS = 10
 
 PERSONALIDAD = (
