@@ -245,24 +245,29 @@ def main():
     inicializar_db()
     groq_client = inicializar_cliente()
     authenticator = configurar_autenticacion()
+
+    # --- LOGIN ---
     authenticator.login(location='main')
     name = st.session_state.get("name")
     authentication_status = st.session_state.get("authentication_status")
     username = st.session_state.get("username")
 
-   if authentication_status is False:
-    st.error('Usuario o contraseña incorrectos')
-    st.stop()
-elif authentication_status is None:
-    st.warning('Por favor, introduce tu usuario y contraseña')
-    st.stop()
+    if authentication_status is False:
+        st.error('Usuario o contraseña incorrectos')
+        st.stop()
+    elif authentication_status is None:
+        st.warning('Por favor, introduce tu usuario y contraseña')
+        st.stop()
 
-st.sidebar.success(f"Bienvenido, {name}")
+    # --- SI ESTÁ AUTENTICADO ---
+    st.sidebar.success(f"Bienvenido, {name}")
     authenticator.logout('Cerrar sesión', 'sidebar')
 
+    # --- CONFIGURACIÓN DE LA VOZ ---
     st.sidebar.markdown("---")
     voz_activada = st.sidebar.toggle("🔊 Responder en voz alta", value=False)
 
+    # --- MOSTRAR RECUERDOS ---
     st.sidebar.markdown("---")
     st.sidebar.subheader("🧠 Recuerdos")
     recuerdos = obtener_recuerdos(username)
@@ -278,52 +283,51 @@ st.sidebar.success(f"Bienvenido, {name}")
     else:
         st.sidebar.caption("Aún no recuerdo nada. Escríbeme «recuerda que...»")
 
+    # --- INTERFAZ DE CHAT ---
     st.title("🛰️ Viernes")
     st.caption("Tu asistente personal en la nube · disponible desde cualquier dispositivo")
 
+    # Historial de chat
     for mensaje in obtener_historial(username, 50):
         with st.chat_message(mensaje["role"], avatar="🧑" if mensaje["role"] == "user" else "🛰️"):
             st.markdown(mensaje["content"])
 
-    resultado = multimodal_chat_input(
-        placeholder="Escríbele a Viernes o usa el micrófono...",
-        enable_voice_input=True,
-        voice_recognition_method="web_speech",
-        voice_language="es-ES",
-        key="chat_input_principal"
-    )
+    # --- SUBIR IMAGEN EN EL PANEL LATERAL ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📸 Analizar imagen")
+    archivo_imagen = st.sidebar.file_uploader("Sube una foto para que Viernes la vea", type=["jpg", "jpeg", "png"])
+    imagen_bytes = None
+    if archivo_imagen is not None:
+        imagen_bytes = archivo_imagen.getvalue()
+        st.sidebar.image(archivo_imagen, caption="Imagen cargada", use_container_width=True)
 
-    if resultado:
-        prompt_texto = resultado.get("text", "")
-        imagen_bytes = None
-        if resultado.get("files"):
-            file_info = resultado["files"][0]
-            if file_info.get('data'):
-                try:
-                    base64_data = file_info['data'].split(',')[1]
-                    imagen_bytes = base64.b64decode(base64_data)
-                except Exception:
-                    st.warning("Hubo un problema al procesar la imagen.")
+    # --- CAJA DE CHAT ESTÁNDAR (TEXTO) ---
+    prompt_texto = st.chat_input("Escríbele a Viernes...")
+    
+    # Si el usuario solo subió una imagen sin escribir nada, usamos un texto por defecto
+    if imagen_bytes and not prompt_texto:
+        prompt_texto = "Describe lo que ves en esta imagen."
         
-        if prompt_texto or imagen_bytes:
-            with st.chat_message("user", avatar="🧑"):
-                if prompt_texto:
-                    st.markdown(prompt_texto)
-                if imagen_bytes:
-                    st.image(imagen_bytes, caption="Imagen enviada", width=300)
-            
-            guardar_mensaje(username, "user", prompt_texto or "[Imagen enviada]")
+    if prompt_texto:
+        # Mostrar mensaje del usuario
+        with st.chat_message("user", avatar="🧑"):
+            if prompt_texto:
+                st.markdown(prompt_texto)
+            if imagen_bytes:
+                st.image(imagen_bytes, caption="Imagen enviada", width=300)
+        
+        # Guardar mensaje del usuario en la BD
+        guardar_mensaje(username, "user", prompt_texto)
 
-            with st.chat_message("assistant", avatar="🛰️"):
-                caja_respuesta = st.empty()
-                respuesta_completa = ""
-                for trozo in generar_respuesta(username, prompt_texto, groq_client, imagen_bytes):
-                    respuesta_completa += trozo
-                    caja_respuesta.markdown(respuesta_completa + "▌")
-                caja_respuesta.markdown(respuesta_completa)
-            
-            if voz_activada and respuesta_completa:
-                hablar_navegador(respuesta_completa)
-
-if __name__ == "__main__":
-    main()
+        # Generar respuesta de Viernes
+        with st.chat_message("assistant", avatar="🛰️"):
+            caja_respuesta = st.empty()
+            respuesta_completa = ""
+            for trozo in generar_respuesta(username, prompt_texto, groq_client, imagen_bytes):
+                respuesta_completa += trozo
+                caja_respuesta.markdown(respuesta_completa + "▌")
+            caja_respuesta.markdown(respuesta_completa)
+        
+        # Reproducir voz si está activada
+        if voz_activada and respuesta_completa:
+            hablar_navegador(respuesta_completa)
