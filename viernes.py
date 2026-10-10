@@ -13,8 +13,8 @@ from duckduckgo_search import DDGS
 st.set_page_config(page_title="Viernes", page_icon="🛰️", layout="centered")
 
 # ===== CONFIGURACIÓN =====
-MODELO_CHAT = "llama-3.3-70b-versatile"
-MODELO_VISION = "llama-3.2-11b-vision-preview"
+MODELO_CHAT = "openai/gpt-oss-120b"
+MODELO_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
 MODELO_AUDIO = "whisper-large-v3-turbo"
 ARCHIVO_BD = "viernes_memoria_v2.db"
 USUARIO = "jefe"
