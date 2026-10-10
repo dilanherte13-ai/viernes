@@ -246,7 +246,6 @@ def main():
     groq_client = inicializar_cliente()
     authenticator = configurar_autenticacion()
 
-    # --- LOGIN ---
     authenticator.login(location='main')
     name = st.session_state.get("name")
     authentication_status = st.session_state.get("authentication_status")
@@ -259,15 +258,12 @@ def main():
         st.warning('Por favor, introduce tu usuario y contraseña')
         st.stop()
 
-    # --- SI ESTÁ AUTENTICADO ---
     st.sidebar.success(f"Bienvenido, {name}")
     authenticator.logout('Cerrar sesión', 'sidebar')
 
-    # --- CONFIGURACIÓN DE LA VOZ ---
     st.sidebar.markdown("---")
     voz_activada = st.sidebar.toggle("🔊 Responder en voz alta", value=False)
 
-    # --- MOSTRAR RECUERDOS ---
     st.sidebar.markdown("---")
     st.sidebar.subheader("🧠 Recuerdos")
     recuerdos = obtener_recuerdos(username)
@@ -283,16 +279,13 @@ def main():
     else:
         st.sidebar.caption("Aún no recuerdo nada. Escríbeme «recuerda que...»")
 
-    # --- INTERFAZ DE CHAT ---
     st.title("🛰️ Viernes")
     st.caption("Tu asistente personal en la nube · disponible desde cualquier dispositivo")
 
-    # Historial de chat
     for mensaje in obtener_historial(username, 50):
         with st.chat_message(mensaje["role"], avatar="🧑" if mensaje["role"] == "user" else "🛰️"):
             st.markdown(mensaje["content"])
 
-    # --- SUBIR IMAGEN EN EL PANEL LATERAL ---
     st.sidebar.markdown("---")
     st.sidebar.subheader("📸 Analizar imagen")
     archivo_imagen = st.sidebar.file_uploader("Sube una foto para que Viernes la vea", type=["jpg", "jpeg", "png"])
@@ -301,25 +294,20 @@ def main():
         imagen_bytes = archivo_imagen.getvalue()
         st.sidebar.image(archivo_imagen, caption="Imagen cargada", use_container_width=True)
 
-    # --- CAJA DE CHAT ESTÁNDAR (TEXTO) ---
     prompt_texto = st.chat_input("Escríbele a Viernes...")
     
-    # Si el usuario solo subió una imagen sin escribir nada, usamos un texto por defecto
     if imagen_bytes and not prompt_texto:
         prompt_texto = "Describe lo que ves en esta imagen."
         
     if prompt_texto:
-        # Mostrar mensaje del usuario
         with st.chat_message("user", avatar="🧑"):
             if prompt_texto:
                 st.markdown(prompt_texto)
             if imagen_bytes:
                 st.image(imagen_bytes, caption="Imagen enviada", width=300)
         
-        # Guardar mensaje del usuario en la BD
         guardar_mensaje(username, "user", prompt_texto)
 
-        # Generar respuesta de Viernes
         with st.chat_message("assistant", avatar="🛰️"):
             caja_respuesta = st.empty()
             respuesta_completa = ""
@@ -328,6 +316,5 @@ def main():
                 caja_respuesta.markdown(respuesta_completa + "▌")
             caja_respuesta.markdown(respuesta_completa)
         
-        # Reproducir voz si está activada
         if voz_activada and respuesta_completa:
             hablar_navegador(respuesta_completa)
