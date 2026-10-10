@@ -1,12 +1,13 @@
 """
-Viernes - Asistente personal con memoria permanente en Supabase
+Viernes - Asistente personal multiusuario (versión estable sin Supabase)
 """
+import os
+import sqlite3
 import base64
 import streamlit as st
 import streamlit.components.v1 as components
 from groq import Groq
 from duckduckgo_search import DDGS
-from supabase import create_client
 
 st.set_page_config(page_title="Viernes", page_icon="🛰️", layout="centered")
 
@@ -15,8 +16,12 @@ MODELO_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
 MODELO_AUDIO = "whisper-large-v3-turbo"
 MAX_TURNOS = 10
 
+# Ruta persistente en Streamlit Cloud (no se borra tan seguido)
+ARCHIVO_BD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "viernes_datos.db")
+
 USUARIOS = {
     "jefe": "Viernes2026",
+    "yerley": "clave123",
 }
 
 PERSONALIDAD = (
@@ -33,52 +38,65 @@ def get_groq():
     return Groq(api_key=st.secrets["GROQ_API_KEY"].strip())
 
 
-@st.cache_resource
-def get_supabase():
-    url = st.secrets["SUPABASE_URL"].strip().rstrip("/")
-    key = st.secrets["SUPABASE_KEY"].strip()
-    return create_client(url, key)
-
-
 # ===== BASE DE DATOS =====
+def init_db():
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS historial (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL,
+            rol TEXT NOT NULL,
+            contenido TEXT NOT NULL)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS recuerdos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL,
+            dato TEXT NOT NULL,
+            UNIQUE(usuario, dato))""")
+        c.commit()
+
+
 def guardar_msg(usuario, rol, contenido):
-    sb = get_supabase()
-    sb.table("historial").insert({"usuario": usuario, "rol": rol, "contenido": contenido}).execute()
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        c.execute("INSERT INTO historial (usuario, rol, contenido) VALUES (?, ?, ?)",
+                  (usuario, rol, contenido))
+        c.commit()
 
 
 def get_historial(usuario, limite=20):
-    sb = get_supabase()
-    res = (sb.table("historial").select("rol, contenido")
-           .eq("usuario", usuario).order("id", desc=True).limit(limite).execute())
-    return [{"role": r["rol"], "content": r["contenido"]} for r in reversed(res.data)]
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        cur = c.execute("SELECT rol, contenido FROM historial WHERE usuario = ? "
+                        "ORDER BY id DESC LIMIT ?", (usuario, limite))
+        return [{"role": r, "content": t} for r, t in reversed(cur.fetchall())]
 
 
 def guardar_recuerdo(usuario, dato):
-    sb = get_supabase()
-    existente = sb.table("recuerdos").select("id").eq("usuario", usuario).eq("dato", dato).execute()
-    if existente.data:
+    try:
+        with sqlite3.connect(ARCHIVO_BD) as c:
+            c.execute("INSERT INTO recuerdos (usuario, dato) VALUES (?, ?)", (usuario, dato))
+            c.commit()
+        return True
+    except sqlite3.IntegrityError:
         return False
-    sb.table("recuerdos").insert({"usuario": usuario, "dato": dato}).execute()
-    return True
 
 
 def get_recuerdos(usuario):
-    sb = get_supabase()
-    res = sb.table("recuerdos").select("dato").eq("usuario", usuario).execute()
-    return [r["dato"] for r in res.data]
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        return [r[0] for r in c.execute("SELECT dato FROM recuerdos WHERE usuario = ?",
+                                        (usuario,)).fetchall()]
 
 
 def borrar_recuerdos(usuario):
-    sb = get_supabase()
-    sb.table("recuerdos").delete().eq("usuario", usuario).execute()
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        c.execute("DELETE FROM recuerdos WHERE usuario = ?", (usuario,))
+        c.commit()
 
 
 def borrar_historial(usuario):
-    sb = get_supabase()
-    sb.table("historial").delete().eq("usuario", usuario).execute()
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        c.execute("DELETE FROM historial WHERE usuario = ?", (usuario,))
+        c.commit()
 
 
-# ===== VOZ Y AUDIO =====
+# ===== VOZ =====
 def hablar(texto):
     t = texto.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${").replace("\n", " ")[:600]
     components.html(f"""
@@ -133,14 +151,11 @@ def analizar_imagen(img_bytes, prompt, groq_client):
 # ===== RESPUESTA =====
 def responder(usuario, prompt, groq_client, img_bytes=None):
     p = prompt.lower().strip()
-
     if p.startswith("recuerda que "):
         dato = prompt[12:].strip()
         return f"Anotado, {usuario}: «{dato}»" if guardar_recuerdo(usuario, dato) else "Ya lo tenía anotado."
-
     if img_bytes:
         return analizar_imagen(img_bytes, prompt, groq_client)
-
     if p.startswith("busca ") or "en internet" in p:
         q = prompt.replace("busca", "", 1).replace("en internet", "").strip()
         return buscar_internet(q)
@@ -170,6 +185,7 @@ def responder(usuario, prompt, groq_client, img_bytes=None):
 
 # ===== APP =====
 def main():
+    init_db()
     groq_client = get_groq()
 
     if "logueado" not in st.session_state:
@@ -199,12 +215,7 @@ def main():
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🧠 Recuerdos")
-    try:
-        recs = get_recuerdos(usuario)
-    except Exception as e:
-        st.sidebar.error(f"Error conectando a Supabase: {e}")
-        recs = []
-
+    recs = get_recuerdos(usuario)
     if recs:
         for r in recs:
             st.sidebar.caption(f"- {r}")
