@@ -250,14 +250,14 @@ def main():
     authentication_status = st.session_state.get("authentication_status")
     username = st.session_state.get("username")
 
-    if authentication_status is False:
-        st.error('Usuario o contraseña incorrectos')
-        st.stop()
-    elif authentication_status is None:
-        st.warning('Por favor, introduce tu usuario y contraseña')
-            st.stop()
+   if authentication_status is False:
+    st.error('Usuario o contraseña incorrectos')
+    st.stop()
+elif authentication_status is None:
+    st.warning('Por favor, introduce tu usuario y contraseña')
+    st.stop()
 
-    st.sidebar.success(f"Bienvenido, {name}")
+st.sidebar.success(f"Bienvenido, {name}")
     authenticator.logout('Cerrar sesión', 'sidebar')
 
     st.sidebar.markdown("---")
