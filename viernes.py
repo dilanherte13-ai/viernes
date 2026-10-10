@@ -245,17 +245,17 @@ def main():
     inicializar_db()
     groq_client = inicializar_cliente()
     authenticator = configurar_autenticacion()
-authenticator.login(location='main')
-name = st.session_state.get("name")
-authentication_status = st.session_state.get("authentication_status")
-username = st.session_state.get("username")
+    authenticator.login(location='main')
+    name = st.session_state.get("name")
+    authentication_status = st.session_state.get("authentication_status")
+    username = st.session_state.get("username")
 
     if authentication_status is False:
         st.error('Usuario o contraseña incorrectos')
         st.stop()
     elif authentication_status is None:
         st.warning('Por favor, introduce tu usuario y contraseña')
-        st.stop()
+            st.stop()
 
     st.sidebar.success(f"Bienvenido, {name}")
     authenticator.logout('Cerrar sesión', 'sidebar')
