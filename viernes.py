@@ -1,5 +1,8 @@
 """
-Viernes - Asistente personal en la nube (Versión Final Definitiva)
+Viernes - Asistente personal multiusuario
+-----------------------------------------
+Cada persona entra con su usuario y contraseña, y tiene su propio
+historial y sus propios recuerdos.
 """
 import os
 import sqlite3
@@ -16,13 +19,15 @@ st.set_page_config(page_title="Viernes", page_icon="🛰️", layout="centered")
 MODELO_CHAT = "openai/gpt-oss-120b"
 MODELO_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
 MODELO_AUDIO = "whisper-large-v3-turbo"
-ARCHIVO_BD = "viernes_memoria_v2.db"
+ARCHIVO_BD = "viernes_memoria_v3.db"
+MAX_TURNOS = 10
+
+# ===== USUARIOS (agrega o quita personas aquí) =====
 USUARIOS = {
     "jefe": "Viernes2026",
     "Yerley": "clave123",
+    "Nose": "clave456",
 }
-CONTRASENA = "Viernes2026" "clave123"
-MAX_TURNOS = 10
 
 PERSONALIDAD = (
     "Eres Viernes (F.R.I.D.A.Y.), la IA personal del usuario, sucesora de J.A.R.V.I.S. "
@@ -37,45 +42,68 @@ PERSONALIDAD = (
 def get_groq():
     return Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# ===== BASE DE DATOS =====
+# ===== BASE DE DATOS (por usuario) =====
 def init_db():
     with sqlite3.connect(ARCHIVO_BD) as c:
-        cur = c.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS historial (id INTEGER PRIMARY KEY AUTOINCREMENT, rol TEXT, contenido TEXT, fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-        cur.execute("CREATE TABLE IF NOT EXISTS recuerdos (id INTEGER PRIMARY KEY AUTOINCREMENT, dato TEXT UNIQUE, fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        c.execute("""CREATE TABLE IF NOT EXISTS historial (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL,
+            rol TEXT NOT NULL,
+            contenido TEXT NOT NULL,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS recuerdos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL,
+            dato TEXT NOT NULL,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(usuario, dato))""")
         c.commit()
 
-def guardar_msg(rol, contenido):
+def guardar_msg(usuario, rol, contenido):
     with sqlite3.connect(ARCHIVO_BD) as c:
-        c.execute("INSERT INTO historial (rol, contenido) VALUES (?, ?)", (rol, contenido))
+        c.execute("INSERT INTO historial (usuario, rol, contenido) VALUES (?, ?, ?)",
+                  (usuario, rol, contenido))
         c.commit()
 
-def get_historial(limite=20):
+def get_historial(usuario, limite=20):
     with sqlite3.connect(ARCHIVO_BD) as c:
-        cur = c.execute("SELECT rol, contenido FROM historial ORDER BY id DESC LIMIT ?", (limite,))
+        cur = c.execute(
+            "SELECT rol, contenido FROM historial WHERE usuario = ? ORDER BY id DESC LIMIT ?",
+            (usuario, limite))
         return [{"role": r, "content": t} for r, t in reversed(cur.fetchall())]
 
-def guardar_recuerdo(dato):
+def guardar_recuerdo(usuario, dato):
     try:
         with sqlite3.connect(ARCHIVO_BD) as c:
-            c.execute("INSERT INTO recuerdos (dato) VALUES (?)", (dato,))
+            c.execute("INSERT INTO recuerdos (usuario, dato) VALUES (?, ?)", (usuario, dato))
             c.commit()
         return True
     except sqlite3.IntegrityError:
         return False
 
-def get_recuerdos():
+def get_recuerdos(usuario):
     with sqlite3.connect(ARCHIVO_BD) as c:
-        return [r[0] for r in c.execute("SELECT dato FROM recuerdos").fetchall()]
+        return [r[0] for r in c.execute(
+            "SELECT dato FROM recuerdos WHERE usuario = ?", (usuario,)).fetchall()]
 
-# ===== VOZ (navegador, gratis) =====
+def borrar_recuerdos(usuario):
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        c.execute("DELETE FROM recuerdos WHERE usuario = ?", (usuario,))
+        c.commit()
+
+def borrar_historial(usuario):
+    with sqlite3.connect(ARCHIVO_BD) as c:
+        c.execute("DELETE FROM historial WHERE usuario = ?", (usuario,))
+        c.commit()
+
+# ===== VOZ (navegador) =====
 def hablar(texto):
-    texto = texto.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${").replace("\n", " ")[:600]
+    t = texto.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${").replace("\n", " ")[:600]
     components.html(f"""
     <script>
     try {{
         speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(`{texto}`);
+        const u = new SpeechSynthesisUtterance(`{t}`);
         u.lang = 'es-ES'; u.rate = 1.0; u.pitch = 0.9;
         const v = speechSynthesis.getVoices().find(x => x.lang.startsWith('es'));
         if (v) u.voice = v;
@@ -84,14 +112,13 @@ def hablar(texto):
     </script>
     """, height=0)
 
-# ===== MICRÓFONO (Groq Whisper, gratis) =====
+# ===== MICRÓFONO =====
 def transcribir(audio_bytes, groq_client):
     try:
         t = groq_client.audio.transcriptions.create(
             file=("audio.wav", audio_bytes),
             model=MODELO_AUDIO,
-            language="es"
-        )
+            language="es")
         return t.text.strip()
     except Exception as e:
         return f"[Error de audio: {e}]"
@@ -114,21 +141,19 @@ def analizar_imagen(img_bytes, prompt, groq_client):
             model=MODELO_VISION,
             messages=[{"role": "user", "content": [
                 {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
-            ]}],
-            max_tokens=500
-        )
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}],
+            max_tokens=500)
         return r.choices[0].message.content
     except Exception as e:
         return f"Error al ver la imagen: {e}"
 
 # ===== RESPUESTA =====
-def responder(prompt, groq_client, img_bytes=None):
+def responder(usuario, prompt, groq_client, img_bytes=None):
     p = prompt.lower().strip()
 
     if p.startswith("recuerda que "):
         dato = prompt[12:].strip()
-        return f"Anotado, jefe: «{dato}»" if guardar_recuerdo(dato) else "Ya lo tenía anotado, jefe."
+        return f"Anotado, {usuario}: «{dato}»" if guardar_recuerdo(usuario, dato) else "Ya lo tenía anotado."
 
     if img_bytes:
         return analizar_imagen(img_bytes, prompt, groq_client)
@@ -137,68 +162,74 @@ def responder(prompt, groq_client, img_bytes=None):
         q = prompt.replace("busca", "", 1).replace("en internet", "").strip()
         return buscar_internet(q)
 
-    recuerdos = get_recuerdos()
-    historial = get_historial(MAX_TURNOS)
+    recuerdos = get_recuerdos(usuario)
+    historial = get_historial(usuario, MAX_TURNOS)
     mensajes = [{"role": "system", "content": PERSONALIDAD}]
     if recuerdos:
-        mensajes.append({"role": "system", "content": "Recuerdos del jefe:\n" + "\n".join(f"- {r}" for r in recuerdos)})
+        mensajes.append({"role": "system",
+                         "content": "Recuerdos sobre el jefe:\n" + "\n".join(f"- {r}" for r in recuerdos)})
     mensajes.extend(historial)
     mensajes.append({"role": "user", "content": prompt})
 
     try:
         stream = groq_client.chat.completions.create(
-            model=MODELO_CHAT, messages=mensajes, stream=True, temperature=0.5, max_tokens=1500
-        )
+            model=MODELO_CHAT, messages=mensajes, stream=True,
+            temperature=0.5, max_tokens=1500)
         completo = ""
         for chunk in stream:
             d = chunk.choices[0].delta.content
             if d:
                 completo += d
                 yield d
-        guardar_msg("assistant", completo)
+        guardar_msg(usuario, "assistant", completo)
     except Exception as e:
-        yield f"Problema, jefe: {e}"
+        yield f"Problema: {e}"
 
-# ===== INTERFAZ =====
+# ===== LOGIN =====
+def pantalla_login():
+    st.title("🛰️ Viernes")
+    st.caption("Acceso restringido · cada usuario tiene su propio espacio")
+    u = st.text_input("Usuario")
+    p = st.text_input("Contraseña", type="password")
+    if st.button("Entrar"):
+        if u in USUARIOS and USUARIOS[u] == p:
+            st.session_state.logueado = True
+            st.session_state.usuario = u
+            st.rerun()
+        else:
+            st.error("Usuario o contraseña incorrectos")
+
+# ===== APP =====
 def main():
     init_db()
     groq_client = get_groq()
 
-    # --- LOGIN SIMPLE ---
     if "logueado" not in st.session_state:
         st.session_state.logueado = False
 
     if not st.session_state.logueado:
-        st.title("🛰️ Viernes")
-        st.caption("Acceso restringido")
-        u = st.text_input("Usuario")
-        p = st.text_input("Contraseña", type="password")
-        if st.button("Entrar"):
-            if u == USUARIO and p == CONTRASENA:
-                st.session_state.logueado = True
-                st.rerun()
-            else:
-                st.error("Usuario o contraseña incorrectos")
+        pantalla_login()
         st.stop()
 
-    # --- APP (ya logueado) ---
-    st.sidebar.success("Bienvenido, jefe")
+    usuario = st.session_state.usuario
+
+    # --- SIDEBAR ---
+    st.sidebar.success(f"👤 {usuario}")
     if st.sidebar.button("Cerrar sesión"):
         st.session_state.logueado = False
+        st.session_state.usuario = None
         st.rerun()
 
     voz_on = st.sidebar.toggle("🔊 Responder en voz alta", value=False)
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🧠 Recuerdos")
-    recs = get_recuerdos()
+    st.sidebar.subheader("🧠 Tus recuerdos")
+    recs = get_recuerdos(usuario)
     if recs:
         for r in recs:
             st.sidebar.caption(f"- {r}")
-        if st.sidebar.button("Borrar recuerdos"):
-            with sqlite3.connect(ARCHIVO_BD) as c:
-                c.execute("DELETE FROM recuerdos")
-                c.commit()
+        if st.sidebar.button("Borrar mis recuerdos"):
+            borrar_recuerdos(usuario)
             st.rerun()
     else:
         st.sidebar.caption("Nada aún. Dile: «recuerda que...»")
@@ -210,10 +241,16 @@ def main():
     if img_file:
         st.sidebar.image(img_file, use_container_width=True)
 
-    st.title("🛰️ Viernes")
-    st.caption("Tu asistente personal · disponible 24/7")
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🧹 Borrar mi historial"):
+        borrar_historial(usuario)
+        st.rerun()
 
-    for m in get_historial(50):
+    # --- CHAT ---
+    st.title("🛰️ Viernes")
+    st.caption(f"Bienvenido, {usuario} · tu espacio es privado")
+
+    for m in get_historial(usuario, 50):
         av = "🧑" if m["role"] == "user" else "🛰️"
         with st.chat_message(m["role"], avatar=av):
             st.markdown(m["content"])
@@ -233,7 +270,6 @@ def main():
 
     prompt = st.chat_input("Escríbele a Viernes...")
 
-    # Procesar audio pendiente
     if "prompt_pendiente" in st.session_state:
         prompt = st.session_state.pop("prompt_pendiente")
 
@@ -245,12 +281,12 @@ def main():
             st.markdown(prompt)
             if img_bytes:
                 st.image(img_bytes, width=300)
-        guardar_msg("user", prompt)
+        guardar_msg(usuario, "user", prompt)
 
         with st.chat_message("assistant", avatar="🛰️"):
             caja = st.empty()
             resp = ""
-            for t in responder(prompt, groq_client, img_bytes):
+            for t in responder(usuario, prompt, groq_client, img_bytes):
                 resp += t
                 caja.markdown(resp + "▌")
             caja.markdown(resp)
