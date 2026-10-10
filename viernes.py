@@ -14,7 +14,6 @@ import io
 
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_chat_input_multimodal import multimodal_chat_input
 import streamlit_authenticator as stauth
 from groq import Groq
 from duckduckgo_search import DDGS
