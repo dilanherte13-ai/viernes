@@ -16,7 +16,7 @@ st.set_page_config(page_title="Viernes", page_icon="🛰️", layout="centered")
 MODELO_CHAT = "llama-3.3-70b-versatile"
 MODELO_VISION = "llama-3.2-11b-vision-preview"
 MODELO_AUDIO = "whisper-large-v3-turbo"
-ARCHIVO_BD = "viernes_memoria.db"
+ARCHIVO_BD = "viernes_memoria_v2.db"
 USUARIO = "jefe"
 CONTRASENA = "Viernes2026"
 MAX_TURNOS = 10
